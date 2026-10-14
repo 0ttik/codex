@@ -128,7 +128,8 @@ fn parse_seatbelt_name(raw: &str) -> Result<String, String> {
 }
 
 /// Named allowances appended to the generated Seatbelt policy after its denies, so the
-/// specific rules win: Mach services, bundled XPC services and sysctl reads.
+/// specific rules win: Mach service lookups and registrations, bundled XPC services and
+/// sysctl reads.
 #[derive(Debug, Default, Args)]
 pub struct SeatbeltAllowlist {
     /// Allow the sandboxed command to look up this global Mach service (for example `com.apple.FSEvents`). Repeat to allow multiple services.
@@ -139,6 +140,14 @@ pub struct SeatbeltAllowlist {
     )]
     pub global_names: Vec<String>,
 
+    /// Allow the sandboxed command to look up every global Mach service under this prefix (for example `org.chromium.`). Repeat to allow multiple prefixes.
+    #[arg(
+        long = "allow-mach-lookup-prefix",
+        value_name = "PREFIX",
+        value_parser = parse_seatbelt_name
+    )]
+    pub global_name_prefixes: Vec<String>,
+
     /// Allow the sandboxed command to look up this bundled XPC service (for example `com.apple.CoreSimulator.SimLaunchHost-arm64`). Repeat to allow multiple services.
     #[arg(
         long = "allow-xpc-service",
@@ -146,6 +155,22 @@ pub struct SeatbeltAllowlist {
         value_parser = parse_seatbelt_name
     )]
     pub xpc_services: Vec<String>,
+
+    /// Allow the sandboxed command to register this global Mach service name. Repeat to allow multiple names.
+    #[arg(
+        long = "allow-mach-register",
+        value_name = "SERVICE",
+        value_parser = parse_seatbelt_name
+    )]
+    pub register_names: Vec<String>,
+
+    /// Allow the sandboxed command to register every global Mach service name under this prefix (for example `org.chromium.Chromium.MachPortRendezvousServer.`). Repeat to allow multiple prefixes.
+    #[arg(
+        long = "allow-mach-register-prefix",
+        value_name = "PREFIX",
+        value_parser = parse_seatbelt_name
+    )]
+    pub register_prefixes: Vec<String>,
 
     /// Allow the sandboxed command to read this sysctl (for example `hw.optional.arm64`). Repeat to allow multiple names.
     #[arg(
@@ -170,7 +195,18 @@ impl SeatbeltAllowlist {
     pub fn seatbelt_rules(&self) -> String {
         let rules = [
             (&self.global_names, "mach-lookup", "global-name"),
+            (
+                &self.global_name_prefixes,
+                "mach-lookup",
+                "global-name-prefix",
+            ),
             (&self.xpc_services, "mach-lookup", "xpc-service-name"),
+            (&self.register_names, "mach-register", "global-name"),
+            (
+                &self.register_prefixes,
+                "mach-register",
+                "global-name-prefix",
+            ),
             (&self.sysctl_names, "sysctl-read", "sysctl-name"),
             (&self.sysctl_prefixes, "sysctl-read", "sysctl-name-prefix"),
         ];
