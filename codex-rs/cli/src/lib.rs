@@ -87,7 +87,7 @@ pub struct SeatbeltCommand {
     pub allow_unix_sockets: Vec<AbsolutePathBuf>,
 
     #[command(flatten)]
-    pub mach_allowlist: MachAllowlist,
+    pub seatbelt_allowlist: SeatbeltAllowlist,
 
     /// While the command runs, capture macOS sandbox denials via `log stream` and print them after exit
     #[arg(long = "log-denials", default_value_t = false)]
@@ -106,14 +106,15 @@ fn parse_absolute_path(raw: &str) -> Result<AbsolutePathBuf, String> {
         .map_err(|err| format!("invalid path {raw}: {err}"))
 }
 
-/// Bootstrap service names are `name_t` buffers: 128 bytes including the NUL terminator.
-const MAX_MACH_SERVICE_NAME_LEN: usize = 127;
+/// Bootstrap service names are `name_t` buffers: 128 bytes including the NUL terminator;
+/// sysctl MIB names are shorter still.
+const MAX_SEATBELT_NAME_LEN: usize = 127;
 
-/// Accepts reverse-DNS service names only, so a name can never close the quoted
-/// Seatbelt string it is rendered into.
-fn parse_mach_service_name(raw: &str) -> Result<String, String> {
+/// Accepts dotted identifiers only (reverse-DNS service names, sysctl MIB names), so a
+/// name can never close the quoted Seatbelt string it is rendered into.
+fn parse_seatbelt_name(raw: &str) -> Result<String, String> {
     let valid = !raw.is_empty()
-        && raw.len() <= MAX_MACH_SERVICE_NAME_LEN
+        && raw.len() <= MAX_SEATBELT_NAME_LEN
         && raw
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
@@ -121,20 +122,20 @@ fn parse_mach_service_name(raw: &str) -> Result<String, String> {
         Ok(raw.to_string())
     } else {
         Err(format!(
-            "invalid Mach service name {raw:?}: expected 1-{MAX_MACH_SERVICE_NAME_LEN} ASCII letters, digits, '.', '-' or '_'"
+            "invalid name {raw:?}: expected 1-{MAX_SEATBELT_NAME_LEN} ASCII letters, digits, '.', '-' or '_'"
         ))
     }
 }
 
-/// Mach services the sandboxed command may look up, appended to the generated Seatbelt
-/// policy after its XPC deny so the specific allowances win.
+/// Named allowances appended to the generated Seatbelt policy after its denies, so the
+/// specific rules win: Mach services, bundled XPC services and sysctl reads.
 #[derive(Debug, Default, Args)]
-pub struct MachAllowlist {
+pub struct SeatbeltAllowlist {
     /// Allow the sandboxed command to look up this global Mach service (for example `com.apple.FSEvents`). Repeat to allow multiple services.
     #[arg(
         long = "allow-mach-lookup",
         value_name = "SERVICE",
-        value_parser = parse_mach_service_name
+        value_parser = parse_seatbelt_name
     )]
     pub global_names: Vec<String>,
 
@@ -142,24 +143,45 @@ pub struct MachAllowlist {
     #[arg(
         long = "allow-xpc-service",
         value_name = "SERVICE",
-        value_parser = parse_mach_service_name
+        value_parser = parse_seatbelt_name
     )]
     pub xpc_services: Vec<String>,
+
+    /// Allow the sandboxed command to read this sysctl (for example `hw.optional.arm64`). Repeat to allow multiple names.
+    #[arg(
+        long = "allow-sysctl-read",
+        value_name = "NAME",
+        value_parser = parse_seatbelt_name
+    )]
+    pub sysctl_names: Vec<String>,
+
+    /// Allow the sandboxed command to read every sysctl under this prefix (for example `sysctl.oidfmt.`). Repeat to allow multiple prefixes.
+    #[arg(
+        long = "allow-sysctl-read-prefix",
+        value_name = "PREFIX",
+        value_parser = parse_seatbelt_name
+    )]
+    pub sysctl_prefixes: Vec<String>,
 }
 
-impl MachAllowlist {
-    /// Seatbelt rules for the allowed services; names are validated by the CLI parser, so
-    /// they cannot leave the quoted filter string.
+impl SeatbeltAllowlist {
+    /// Seatbelt rules for the allowances; names are validated by the CLI parser, so they
+    /// cannot leave the quoted filter string.
     pub fn seatbelt_rules(&self) -> String {
-        let global = self
-            .global_names
+        let rules = [
+            (&self.global_names, "mach-lookup", "global-name"),
+            (&self.xpc_services, "mach-lookup", "xpc-service-name"),
+            (&self.sysctl_names, "sysctl-read", "sysctl-name"),
+            (&self.sysctl_prefixes, "sysctl-read", "sysctl-name-prefix"),
+        ];
+        rules
             .iter()
-            .map(|name| format!("\n(allow mach-lookup (global-name \"{name}\"))"));
-        let xpc = self
-            .xpc_services
-            .iter()
-            .map(|name| format!("\n(allow mach-lookup (xpc-service-name \"{name}\"))"));
-        global.chain(xpc).collect()
+            .flat_map(|(names, operation, filter)| {
+                names
+                    .iter()
+                    .map(move |name| format!("\n(allow {operation} ({filter} \"{name}\"))"))
+            })
+            .collect()
     }
 }
 
