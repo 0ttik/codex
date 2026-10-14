@@ -38,6 +38,7 @@ use tokio::process::Command as TokioCommand;
 use toml::Value as TomlValue;
 
 use crate::LandlockCommand;
+use crate::MachAllowlist;
 use crate::SeatbeltCommand;
 use crate::WindowsCommand;
 use crate::exit_status::handle_exit_status;
@@ -58,7 +59,7 @@ pub async fn run_command_under_seatbelt(
         cwd,
         include_managed_config,
         allow_unix_sockets,
-        allow_mach_lookups,
+        mach_allowlist,
         log_denials,
         config_overrides,
         command,
@@ -81,7 +82,7 @@ pub async fn run_command_under_seatbelt(
         SandboxType::Seatbelt,
         log_denials,
         &allow_unix_sockets,
-        &allow_mach_lookups,
+        &mach_allowlist,
     )
     .await
 }
@@ -127,7 +128,7 @@ pub async fn run_command_under_landlock(
         SandboxType::Landlock,
         /*log_denials*/ false,
         &[],
-        &[],
+        &MachAllowlist::default(),
     )
     .await
 }
@@ -164,7 +165,7 @@ pub async fn run_command_under_windows_sandbox(
         SandboxType::Windows,
         /*log_denials*/ false,
         &[],
-        &[],
+        &MachAllowlist::default(),
     )
     .await
 }
@@ -213,7 +214,7 @@ async fn run_command_under_sandbox(
     log_denials: bool,
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     allow_unix_sockets: &[AbsolutePathBuf],
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] allow_mach_lookups: &[String],
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] mach_allowlist: &MachAllowlist,
 ) -> anyhow::Result<()> {
     let sandbox_state = config_options
         .sandbox_state
@@ -418,13 +419,7 @@ async fn run_command_under_sandbox(
             // for the unsandboxed shell that resumes when Codex exits.
             match args.as_mut_slice() {
                 [flag, policy, ..] if flag.as_str() == "-p" => {
-                    // Service names are validated by the CLI parser, so they cannot
-                    // leave the quoted global-name string.
-                    for service in allow_mach_lookups {
-                        policy.push_str(&format!(
-                            "\n(allow mach-lookup (global-name \"{service}\"))"
-                        ));
-                    }
+                    policy.push_str(&mach_allowlist.seatbelt_rules());
                     // Older macOS policy compilers do not define the TIOCSTI symbol.
                     policy.push_str(&format!(
                         "\n(deny file-ioctl (ioctl-command {}))",

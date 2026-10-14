@@ -86,13 +86,8 @@ pub struct SeatbeltCommand {
     #[arg(long = "allow-unix-socket", value_parser = parse_absolute_path)]
     pub allow_unix_sockets: Vec<AbsolutePathBuf>,
 
-    /// Allow the sandboxed command to look up this global Mach service (for example `com.apple.FSEvents`). Repeat to allow multiple services.
-    #[arg(
-        long = "allow-mach-lookup",
-        value_name = "SERVICE",
-        value_parser = parse_mach_service_name
-    )]
-    pub allow_mach_lookups: Vec<String>,
+    #[command(flatten)]
+    pub mach_allowlist: MachAllowlist,
 
     /// While the command runs, capture macOS sandbox denials via `log stream` and print them after exit
     #[arg(long = "log-denials", default_value_t = false)]
@@ -128,6 +123,43 @@ fn parse_mach_service_name(raw: &str) -> Result<String, String> {
         Err(format!(
             "invalid Mach service name {raw:?}: expected 1-{MAX_MACH_SERVICE_NAME_LEN} ASCII letters, digits, '.', '-' or '_'"
         ))
+    }
+}
+
+/// Mach services the sandboxed command may look up, appended to the generated Seatbelt
+/// policy after its XPC deny so the specific allowances win.
+#[derive(Debug, Default, Args)]
+pub struct MachAllowlist {
+    /// Allow the sandboxed command to look up this global Mach service (for example `com.apple.FSEvents`). Repeat to allow multiple services.
+    #[arg(
+        long = "allow-mach-lookup",
+        value_name = "SERVICE",
+        value_parser = parse_mach_service_name
+    )]
+    pub global_names: Vec<String>,
+
+    /// Allow the sandboxed command to look up this bundled XPC service (for example `com.apple.CoreSimulator.SimLaunchHost-arm64`). Repeat to allow multiple services.
+    #[arg(
+        long = "allow-xpc-service",
+        value_name = "SERVICE",
+        value_parser = parse_mach_service_name
+    )]
+    pub xpc_services: Vec<String>,
+}
+
+impl MachAllowlist {
+    /// Seatbelt rules for the allowed services; names are validated by the CLI parser, so
+    /// they cannot leave the quoted filter string.
+    pub fn seatbelt_rules(&self) -> String {
+        let global = self
+            .global_names
+            .iter()
+            .map(|name| format!("\n(allow mach-lookup (global-name \"{name}\"))"));
+        let xpc = self
+            .xpc_services
+            .iter()
+            .map(|name| format!("\n(allow mach-lookup (xpc-service-name \"{name}\"))"));
+        global.chain(xpc).collect()
     }
 }
 
