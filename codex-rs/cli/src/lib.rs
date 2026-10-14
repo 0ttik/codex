@@ -86,6 +86,14 @@ pub struct SeatbeltCommand {
     #[arg(long = "allow-unix-socket", value_parser = parse_absolute_path)]
     pub allow_unix_sockets: Vec<AbsolutePathBuf>,
 
+    /// Allow the sandboxed command to look up this global Mach service (for example `com.apple.FSEvents`). Repeat to allow multiple services.
+    #[arg(
+        long = "allow-mach-lookup",
+        value_name = "SERVICE",
+        value_parser = parse_mach_service_name
+    )]
+    pub allow_mach_lookups: Vec<String>,
+
     /// While the command runs, capture macOS sandbox denials via `log stream` and print them after exit
     #[arg(long = "log-denials", default_value_t = false)]
     pub log_denials: bool,
@@ -101,6 +109,26 @@ pub struct SeatbeltCommand {
 fn parse_absolute_path(raw: &str) -> Result<AbsolutePathBuf, String> {
     AbsolutePathBuf::relative_to_current_dir(raw)
         .map_err(|err| format!("invalid path {raw}: {err}"))
+}
+
+/// Bootstrap service names are `name_t` buffers: 128 bytes including the NUL terminator.
+const MAX_MACH_SERVICE_NAME_LEN: usize = 127;
+
+/// Accepts reverse-DNS service names only, so a name can never close the quoted
+/// Seatbelt string it is rendered into.
+fn parse_mach_service_name(raw: &str) -> Result<String, String> {
+    let valid = !raw.is_empty()
+        && raw.len() <= MAX_MACH_SERVICE_NAME_LEN
+        && raw
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    if valid {
+        Ok(raw.to_string())
+    } else {
+        Err(format!(
+            "invalid Mach service name {raw:?}: expected 1-{MAX_MACH_SERVICE_NAME_LEN} ASCII letters, digits, '.', '-' or '_'"
+        ))
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -188,3 +216,7 @@ pub struct WindowsCommand {
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
 }
+
+#[cfg(test)]
+#[path = "sandbox_args_tests.rs"]
+mod tests;
